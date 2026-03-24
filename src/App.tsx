@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, User, Sparkles, X, AlertCircle, Menu, History, MessageSquare, FileText, File, LogIn, LogOut } from 'lucide-react';
+import { Send, User, Sparkles, X, AlertCircle, Menu, History, MessageSquare, FileText, File } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
 import { getSupabase } from './supabaseClient';
+import { v4 as uuidv4 } from 'uuid';
 
 // Custom Icons
 const TwoDots = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
@@ -53,45 +54,21 @@ export default function App() {
   const [appTitle, setAppTitle] = useState('Bharat AI');
   const [systemPrompt, setSystemPrompt] = useState('You are a warm, conversational, and culturally aware AI assistant from Bharat. Always provide answers that are highly humanized, natural, and easy to understand. Avoid robotic jargon. Make your responses interactive by occasionally asking relevant follow-up questions to keep the conversation engaging.');
 
-  // Supabase Auth State
-  const [session, setSession] = useState<any>(null);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
+  // Supabase Persistence State
+  const [clientId, setClientId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll to bottom of chat
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
+  // Initialize Client ID for persistence
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, isLoading]);
-
-  // Supabase Auth Effect
-  useEffect(() => {
-    const supabase = getSupabase();
-    if (!supabase) return;
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth event:', event);
-      setSession(session);
-      
-      if (session) {
-        // Fetch history on initial load or sign in
-        if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-          await fetchChatHistory(session.user.id);
-        }
-      } else if (event === 'SIGNED_OUT') {
-        setMessages([{ role: 'model', text: 'Namaste! I am your AI assistant. How can I help you today?' }]);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    let id = localStorage.getItem('bharat_ai_client_id');
+    if (!id) {
+      id = uuidv4();
+      localStorage.setItem('bharat_ai_client_id', id);
+    }
+    setClientId(id);
+    fetchChatHistory(id);
   }, []);
 
   const fetchChatHistory = async (userId: string) => {
@@ -137,10 +114,10 @@ export default function App() {
 
   const saveMessageToSupabase = async (msg: Message) => {
     const supabase = getSupabase();
-    if (!supabase || !session) return;
+    if (!supabase || !clientId) return;
 
     const { error } = await supabase.from('messages').insert({
-      user_id: session.user.id,
+      user_id: clientId,
       role: msg.role,
       content: msg.text,
       file_name: msg.file?.name,
@@ -200,7 +177,7 @@ export default function App() {
     const updatedMessages = [...messages, userMessage];
     
     setMessages(updatedMessages);
-    if (session) saveMessageToSupabase(userMessage);
+    if (clientId) saveMessageToSupabase(userMessage);
     setInput('');
     setAttachedFile(null);
     setIsLoading(true);
@@ -238,7 +215,7 @@ export default function App() {
       
       const modelMessage: Message = { role: 'model', text: aiResponseText };
       setMessages(prev => [...prev, modelMessage]);
-      if (session) saveMessageToSupabase(modelMessage);
+      if (clientId) saveMessageToSupabase(modelMessage);
     } catch (err: any) {
       setError(err.message || 'An error occurred');
       setMessages(prev => prev.slice(0, -1)); // Remove the failed message
@@ -253,32 +230,6 @@ export default function App() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
-    }
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const supabase = getSupabase();
-    if (!supabase) {
-      alert('Supabase configuration is missing. Please set your secrets.');
-      return;
-    }
-    setAuthLoading(true);
-    try {
-      const { error } = await supabase.auth.signInWithOtp({ email: authEmail });
-      if (error) throw error;
-      alert('Check your email for the login link!');
-    } catch (error: any) {
-      alert(error.error_description || error.message);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    const supabase = getSupabase();
-    if (supabase) {
-      await supabase.auth.signOut();
     }
   };
 
@@ -322,40 +273,22 @@ export default function App() {
           </button>
         </div>
 
-        {/* Auth Section */}
+        {/* Supabase Status */}
         <div className="px-6 pb-4 border-b border-slate-100 mb-4">
-          {session ? (
-            <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
-              <div className="flex flex-col overflow-hidden">
-                <span className="text-xs font-bold text-slate-400 uppercase">Logged in as</span>
-                <span className="text-sm font-semibold text-slate-700 truncate">{session.user.email}</span>
+          {!getSupabase() && (
+            <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 text-xs text-orange-800 flex items-center gap-2">
+              <AlertCircle size={14} className="shrink-0" />
+              <div>
+                <p className="font-bold">Supabase Not Configured</p>
+                <p className="mt-1">Please set <b>SUPABASE_URL</b> and <b>SUPABASE_ANON_KEY</b> in your secrets.</p>
               </div>
-              <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 transition-colors" title="Logout">
-                <LogOut size={18} />
-              </button>
             </div>
-          ) : (
-            <form onSubmit={handleLogin} className="flex flex-col gap-2">
-              <span className="text-xs font-bold text-slate-400 uppercase">Account</span>
-              <div className="flex gap-2">
-                <input
-                  type="email"
-                  placeholder="Enter email to login"
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#FF9933]/50"
-                  required
-                />
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  className="bg-[#000080] text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-[#1a1a9e] transition-colors disabled:opacity-50 flex items-center justify-center min-w-[40px]"
-                  title="Login with Magic Link"
-                >
-                  {authLoading ? '...' : <LogIn size={18} />}
-                </button>
-              </div>
-            </form>
+          )}
+          {getSupabase() && (
+            <div className="bg-green-50 p-3 rounded-xl border border-green-100 text-[10px] text-green-800 flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <p className="font-bold uppercase tracking-wider">Cloud Sync Active</p>
+            </div>
           )}
         </div>
 
