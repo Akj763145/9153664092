@@ -41,7 +41,7 @@ type Message = {
 export default function App() {
   // App State
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'model', text: 'Namaste! I am your AI assistant. How can I help you today?' }
+    { role: 'model', text: 'Namaste! I am Bharat AI, your assistant. How can I help you today?' }
   ]);
   const [input, setInput] = useState('');
   const [attachedFile, setAttachedFile] = useState<Message['file']>(null);
@@ -52,13 +52,22 @@ export default function App() {
   // Customization State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [appTitle, setAppTitle] = useState('Bharat AI');
-  const [systemPrompt, setSystemPrompt] = useState('You are a warm, conversational, and culturally aware AI assistant from Bharat. Always provide answers that are highly humanized, natural, and easy to understand. Avoid robotic jargon. Make your responses interactive by occasionally asking relevant follow-up questions to keep the conversation engaging.');
+  const [systemPrompt, setSystemPrompt] = useState('Your name is Bharat AI. You are a warm, conversational, and culturally aware AI assistant from Bharat. Always provide answers that are highly humanized, natural, and easy to understand. Avoid robotic jargon. If asked about your identity, you are Bharat AI, developed to serve the people of Bharat. Never refer to yourself as Gemini or a model trained by Google. Make your responses interactive by occasionally asking relevant follow-up questions to keep the conversation engaging.');
 
   // Supabase Persistence State
   const [clientId, setClientId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-scroll to bottom of chat
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isLoading]);
 
   // Initialize Client ID for persistence
   useEffect(() => {
@@ -203,7 +212,7 @@ export default function App() {
         return { role: m.role, parts };
       });
 
-      const response = await ai.models.generateContent({
+      const streamResponse = await ai.models.generateContentStream({
         model: 'gemini-3-flash-preview',
         contents: contents,
         config: {
@@ -211,11 +220,27 @@ export default function App() {
         }
       });
       
-      const aiResponseText = response.text || '';
+      let fullText = '';
+      let isFirstChunk = true;
+
+      for await (const chunk of streamResponse) {
+        const chunkText = chunk.text || '';
+        fullText += chunkText;
+        
+        if (isFirstChunk) {
+          setIsLoading(false); // Stop showing the loading indicator once we start receiving text
+          setMessages(prev => [...prev, { role: 'model', text: fullText }]);
+          isFirstChunk = false;
+        } else {
+          setMessages(prev => {
+            const newMessages = [...prev];
+            newMessages[newMessages.length - 1] = { role: 'model', text: fullText };
+            return newMessages;
+          });
+        }
+      }
       
-      const modelMessage: Message = { role: 'model', text: aiResponseText };
-      setMessages(prev => [...prev, modelMessage]);
-      if (clientId) saveMessageToSupabase(modelMessage);
+      if (clientId) saveMessageToSupabase({ role: 'model', text: fullText });
     } catch (err: any) {
       setError(err.message || 'An error occurred');
       setMessages(prev => prev.slice(0, -1)); // Remove the failed message
